@@ -105,13 +105,14 @@ function locked() { return given_up; }
 function setup_scene(lvl)
 {
   level = lvl;
+  level.holes = normalize_holes(level.holes);
   ghosts = [];
   set_area(lvl.w, lvl.h);
   if (floor_img) floor_img.remove();
   if (light_layer) light_layer.remove();
   light_layer = createGraphics(AREA_W, AREA_H);
   light_layer.pixelDensity(1);
-  floor_img = make_floor_art(AREA_W, AREA_H, level.border, palette, level.seed);
+  floor_img = make_floor_art(AREA_W, AREA_H, level.border, palette, level.seed, level.holes);
   reset_level();
 }
 
@@ -128,6 +129,7 @@ function start_level()
 function reset_level()
 {
   world = new World();
+  world.holes = level.holes.map(h => h.poly);
   for (const s of level.perm_walls) world.add_perm_wall(s.sx, s.sy, s.ex, s.ey, !!s.straight);
   world.lights = level.lights.map(l => ({...l}));
   world.detectors = level.detectors.map(d => ({...d}));
@@ -176,7 +178,8 @@ function give_up()
 {
   apply_solution();
   given_up = true;
-  save_game();
+  storage.del('save'); // a given-up game is over: leaving it means starting fresh at level 1
+  has_save = false;
 }
 
 function next_level()
@@ -207,7 +210,7 @@ function flash(msg)
 
 function save_game()
 {
-  if (mode !== 'puzzle' || state !== 'game' || !world) return;
+  if (mode !== 'puzzle' || state !== 'game' || !world || given_up) return;
   const pt = id => world.get_point(id);
   storage.set('save', {
     v: 1,
@@ -294,6 +297,8 @@ function end_timed()
   timed_new_best = timed_solved > best;
   if (timed_new_best) storage.set('timed_best', timed_solved);
   pending = null; press = null; drag_light = null;
+  storage.del('save'); // game over: the old puzzle can't be continued
+  has_save = false;
   state = 'results';
   menu_sel = -1;
 }
@@ -732,7 +737,15 @@ function mouseDragged()
   // once movement starts, press.moved stays true, so the hold-to-delete timer never fires
   if (!press.moved && dist(press.x, press.y, mx, my) > 6) press.moved = true;
   if (drag_light && press.moved)
+  {
     world.move_light(drag_light, mx, my, AREA, MARGIN + 4);
+    // the pointer got well ahead of a light that is stuck behind something: let go of it
+    if (dist(drag_light.x, drag_light.y, mx, my) > 90)
+    {
+      drag_light = null;
+      save_game();
+    }
+  }
   if (drag_point && press.moved)
     world.move_point(drag_point, mx, my, level.border);
 }
@@ -768,6 +781,11 @@ function mouseReleased()
     return;
   }
 
+  if (!world.point_at(mx, my) && !world.perm_wall_at(mx, my) && world.in_hole(mx, my))
+  {
+    flash("can't build on a hole");
+    return;
+  }
   const target = world.anchor_at(mx, my) || world.add_point(mx, my);
   if (!pending)
   {

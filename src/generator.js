@@ -18,7 +18,9 @@ function seg(x1, y1, x2, y2) { return {sx: x1, sy: y1, ex: x2, ey: y2}; }
 
 // The outer border of the level being generated: a closed polygon of {x, y}.
 let BORDER = [];
-let BORDER_SEGS = [];
+let BORDER_SEGS = []; // permanent walls of the border and the holes' rims
+let HOLES = [];      // every hole polygon (walled or open)
+let HOLE_EDGES = []; // edges of open holes, kept clear of lights and detectors
 
 // Irregular outline hugging the screen edge: chamfered corners, uneven inset and a few
 // notches. It never eats more than ~45px of playing space.
@@ -60,18 +62,18 @@ function make_border()
   return pts;
 }
 
-function set_border(poly)
+function set_border(poly, holes = [])
 {
   BORDER = poly;
-  BORDER_SEGS = poly.map((p, i) => {
-    const q = poly[(i + 1) % poly.length];
-    return seg(p.x, p.y, q.x, q.y);
-  });
+  HOLES = holes.map(h => h.poly);
+  HOLE_EDGES = holes.filter(h => !h.walled).flatMap(h => poly_edges(h.poly));
+  BORDER_SEGS = rim_walls(poly, holes.filter(h => h.walled).map(h => h.poly));
 }
 
 function inside(x, y, pad)
 {
-  return point_in_polygon(x, y, BORDER) && min_seg_dist(x, y, BORDER_SEGS) >= pad;
+  return point_in_polygon(x, y, BORDER) && !HOLES.some(h => point_in_polygon(x, y, h)) &&
+    min_seg_dist(x, y, BORDER_SEGS) >= pad && (!HOLE_EDGES.length || min_seg_dist(x, y, HOLE_EDGES) >= pad);
 }
 
 function rnd_point(pad)
@@ -86,7 +88,8 @@ function rnd_point(pad)
 
 function crosses_border(s)
 {
-  return BORDER_SEGS.some(b => segments_intersect(s.sx, s.sy, s.ex, s.ey, b));
+  return BORDER_SEGS.some(b => segments_intersect(s.sx, s.sy, s.ex, s.ey, b)) ||
+         segment_hits_hole(s.sx, s.sy, s.ex, s.ey, HOLES);
 }
 function min_seg_dist(x, y, segs) { return Math.min(...segs.map(s => dist_point_segment(x, y, s))); }
 function same_color(a, b) { return a.r === b.r && a.g === b.g && a.b === b.b; }
@@ -276,7 +279,9 @@ const FORMATIONS = ['random', 'ring', 'line', 'corners'];
 function try_generate(diff, big)
 {
   const border = make_border();
-  set_border(border);
+  const hole_kind = Math.random() < (diff < 2 ? 0.3 : 0.6) ? pick(HOLE_KINDS) : null;
+  const holes = hole_kind ? assign_hole_types(make_holes(hole_kind)) : [];
+  set_border(border, holes);
   const perm = BORDER_SEGS.map(b => ({...b}));
 
   // generated permanent walls, shaped by the level's theme
@@ -295,6 +300,10 @@ function try_generate(diff, big)
   }
   if (free_perm.length < (theme === 'scatter' ? 0 : 2)) return null;
 
+  // which parts of the floor can reach each other (holes and walls cut the level into islands)
+  const space = analyze_space(perm, (x, y) => inside(x, y, 6));
+  if (holes.length && space.free_n < space.total * 0.3) return null;
+
   // lights, in a pattern when one fits
   const lights = [];
   const n_lights = diff < 3 ? 2 : 3;
@@ -309,6 +318,7 @@ function try_generate(diff, big)
       if (!inside(p.x, p.y, 25)) continue;
       if (min_seg_dist(p.x, p.y, perm) < 30) continue;
       if (lights.some(l => Math.hypot(l.x - p.x, l.y - p.y) < 90)) continue;
+      if (holes.length && space.sizes[space.region(p.x, p.y)] < space.free_n * 0.08) continue; // not a sliver of an island
       const [r, g, b] = LIGHT_COLORS[i];
       lights.push({x: p.x, y: p.y, r, g, b, on: true});
       placed = true;
@@ -355,6 +365,9 @@ function try_generate(diff, big)
   const polys_sol = polys_for(lights, all_sol);
   const dets = [];
   const n_dets = Math.min(2 + Math.floor(diff / 2), big ? 14 : 8);
+  // rare: shadow detectors (black) that must stay completely dark, lit by the bare room so a wall has to shade them
+  const max_shadows = diff >= 3 && Math.random() < 0.3 ? (big ? 2 : 1 + (diff >= 8 && Math.random() < 0.3 ? 1 : 0)) : 0;
+  let shadows = 0;
   for (let t = 0; t < 800 && dets.length < n_dets; ++t)
   {
     const p = rnd_point(10);
@@ -362,11 +375,14 @@ function try_generate(diff, big)
     if (lights.some(l => Math.hypot(l.x - p.x, l.y - p.y) < 40)) continue;
     if (dets.some(d => Math.hypot(d.x - p.x, d.y - p.y) < 60)) continue;
     const c = robust_color(polys_sol, lights, p.x, p.y);
-    if (!c || c.r + c.g + c.b === 0) continue;
+    if (!c) continue;
+    const dark = c.r + c.g + c.b === 0;
+    if (dark && shadows >= max_shadows) continue;
     if (same_color(c, color_at_polys(polys_bare, lights, p.x, p.y))) continue;
+    if (dark) ++shadows;
     dets.push({x: p.x, y: p.y, r: c.r, g: c.g, b: c.b, lit: false});
   }
-  if (dets.length < (big ? 8 : 2)) return null;
+  if (dets.length < (big ? 8 : 2) || dets.length === shadows) return null;
 
   // drop solution walls that aren't needed
   let changed = true;
@@ -391,7 +407,7 @@ function try_generate(diff, big)
     for (let k = 0; k < 100; ++k)
     {
       const p = k === 0 && start_form[i] ? start_form[i] : rnd_point(25);
-      if (inside(p.x, p.y, 25) && min_seg_dist(p.x, p.y, perm) >= 30 && dets.every(d => Math.hypot(d.x - p.x, d.y - p.y) >= 40))
+      if (inside(p.x, p.y, 25) && space.region(p.x, p.y) === space.region(l.x, l.y) && min_seg_dist(p.x, p.y, perm) >= 30 && dets.every(d => Math.hypot(d.x - p.x, d.y - p.y) >= 40))
         return {...l, x: p.x, y: p.y, on: Math.random() > 0.3};
     }
     return {...l};
@@ -405,6 +421,7 @@ function try_generate(diff, big)
     seed: Math.floor(Math.random() * 1e9),
     theme,
     border,
+    holes,
     perm_walls: perm,
     lights: start_lights,
     detectors: dets,

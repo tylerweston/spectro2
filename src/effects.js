@@ -99,6 +99,9 @@ function init_detector_fx(d)
   d.rings = [[], [], []];
 }
 
+// shadow detectors (black) glow violet in their effects since black would be invisible
+function dc(d) { return d.r + d.g + d.b === 0 ? [140, 110, 230] : [d.r, d.g, d.b]; }
+
 function start_detector_flash(d)
 {
   sfx.play('detector_on');
@@ -110,15 +113,15 @@ function start_detector_flash(d)
   for (let i = 0; i < 3; ++i)
     for (let j = 0; j < 2; ++j)
       d.rings[i].push([random(TWO_PI), random(QUARTER_PI, HALF_PI)]);
-  particles.burst(d.x, d.y, 28, [d.r, d.g, d.b], 130, 700);
+  particles.burst(d.x, d.y, 28, dc(d), 130, 700);
 }
 
 function draw_detector(d, dt)
 {
   const frames = dt / 16.7;
-  const c = color(d.r, d.g, d.b);
+  const c = color(...dc(d));
   const white = d.r === 255 && d.g === 255 && d.b === 255;
-  const black = d.r === 0 && d.g === 0 && d.b === 0;
+  const shadow = d.r === 0 && d.g === 0 && d.b === 0;
 
   if (d.lit && !d.was_lit) start_detector_flash(d);
   d.was_lit = d.lit;
@@ -126,8 +129,7 @@ function draw_detector(d, dt)
   if (settings.animations) d.anim_cycle = (d.anim_cycle + d.anim_speed * (d.lit ? 1.5 : 0.8) * frames) % TWO_PI;
 
   noStroke();
-  fill(d.r, d.g, d.b, d.lit ? 80 : 45);
-  circle(d.x, d.y, 34);
+  if (!shadow) { fill(...dc(d), d.lit ? 80 : 45); circle(d.x, d.y, 34); }
 
   if (d.flashing)
   {
@@ -137,18 +139,39 @@ function draw_detector(d, dt)
     noFill();
     if (d.flash_radius > 60)
     {
-      strokeWeight(5); stroke(d.r, d.g, d.b, alph * 0.3);
+      strokeWeight(5); stroke(...dc(d), alph * 0.3);
       for (const [s, z] of d.rings[0]) arc(d.x, d.y, d.flash_radius * (0.3 + z / 4), d.flash_radius * (0.3 + z / 4), s, s + z);
-      strokeWeight(10); stroke(d.r, d.g, d.b, alph * 0.7);
+      strokeWeight(10); stroke(...dc(d), alph * 0.7);
       for (const [s, z] of d.rings[1]) arc(d.x, d.y, d.flash_radius * (0.5 + z / 3), d.flash_radius * (0.5 + z / 3), s, s + z);
     }
-    strokeWeight(18); stroke(d.r, d.g, d.b, alph);
+    strokeWeight(18); stroke(...dc(d), alph);
     for (const [s, z] of d.rings[2]) arc(d.x, d.y, d.flash_radius + z * 8, d.flash_radius + z * 8, s, s + z);
     if (d.flash_radius > d.flash_max) d.flashing = false;
   }
 
   noFill();
   const size = 26;
+  if (shadow)
+  {
+    // a shadow detector wants no light at all: a dark eclipse disc when satisfied, a warning ring when lit
+    const pulse = 0.5 + 0.5 * sin(d.anim_cycle);
+    if (d.lit)
+    {
+      noStroke(); fill(0, 0, 0, 230); circle(d.x, d.y, size + 6);
+      noFill(); strokeWeight(3); stroke(140, 110, 230, 110 + 90 * pulse); circle(d.x, d.y, size + 2);
+      strokeWeight(1.5); stroke(140, 110, 230, 60 + 60 * pulse); circle(d.x, d.y, size + 12);
+    }
+    else
+    {
+      noStroke(); fill(0, 0, 0, 150); circle(d.x, d.y, size + 6);
+      const a0 = (d.anim_offset + d.anim_cycle) % TWO_PI;
+      noFill(); strokeWeight(8); stroke(140, 110, 230, 220);
+      for (let k = 0; k < 4; ++k) arc(d.x, d.y, size, size, a0 + k * HALF_PI, a0 + k * HALF_PI + 0.9);
+      strokeWeight(4); stroke(0, 0, 0);
+      for (let k = 0; k < 4; ++k) arc(d.x, d.y, size, size, a0 + k * HALF_PI, a0 + k * HALF_PI + 0.9);
+    }
+    return;
+  }
   if (d.lit)
   {
     strokeWeight(6);
@@ -157,13 +180,13 @@ function draw_detector(d, dt)
     strokeWeight(4);
     stroke(c);
     circle(d.x, d.y, size);
-    if (settings.animations && random() < 0.2) particles.burst(d.x, d.y, 1, [d.r, d.g, d.b], 45, 500);
+    if (settings.animations && random() < 0.2) particles.burst(d.x, d.y, 1, dc(d), 45, 500);
   }
   else
   {
     const a0 = (d.anim_offset + d.anim_cycle) % TWO_PI;
     strokeWeight(8);
-    if (black) stroke(170, 100); else stroke(4, 100);
+    stroke(4, 100);
     arc(d.x, d.y, size, size, a0, a0 + HALF_PI);
     arc(d.x, d.y, size, size, PI + a0, PI + a0 + HALF_PI);
     strokeWeight(4);

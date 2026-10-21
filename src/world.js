@@ -14,8 +14,13 @@ class World
     this.walls = [];       // {a, b, perm} point ids
     this.lights = [];      // {x, y, r, g, b, on}
     this.detectors = [];   // {x, y, r, g, b, lit}
+    this.holes = [];       // polygons of {x, y}: voids in the floor
     this.next_id = 1;
   }
+
+  in_hole(x, y) { return this.holes.some(h => point_in_polygon(x, y, h)); }
+
+  over_hole(x1, y1, x2, y2) { return segment_hits_hole(x1, y1, x2, y2, this.holes); }
 
   add_point(x, y, perm = false)
   {
@@ -83,6 +88,7 @@ class World
   {
     if (p1.id === p2.id) return false;
     if (Math.hypot(p1.x - p2.x, p1.y - p2.y) < 12) return false;
+    if (this.over_hole(p1.x, p1.y, p2.x, p2.y)) return false;
     if (this.walls.some(w => !w.perm && ((w.a === p1.id && w.b === p2.id) || (w.a === p2.id && w.b === p1.id)))) return false;
     this.walls.push({a: p1.id, b: p2.id, perm: false});
     return true;
@@ -149,21 +155,66 @@ class World
     return this.lights.find(l => Math.hypot(l.x - x, l.y - y) <= radius) || null;
   }
 
-  // moves a light toward (x, y) without crossing a wall or leaving the bounds; slides along walls
+  // Moves a light toward (x, y) in small steps. A step that would hit a wall, hole edge or detector
+  // is pushed back out along the obstacle's normal, so the light slides along it at any angle
+  // instead of locking to an axis. Returns false when the light couldn't make progress.
   move_light(l, x, y, bounds, margin, clearance = 9, det_clearance = 26)
   {
-    const segs = this.segments();
-    const path_ok = (nx, ny, d) =>
-      dist_point_segment(d.x, d.y, {sx: l.x, sy: l.y, ex: nx, ey: ny}) >= det_clearance ||
-      Math.hypot(d.x - nx, d.y - ny) >= Math.hypot(d.x - l.x, d.y - l.y); // lets a light already overlapping a detector move away
-    const ok = (nx, ny) =>
-      nx >= margin && nx <= bounds.w - margin && ny >= margin && ny <= bounds.h - margin &&
-      segs.every(s => !segments_intersect(l.x, l.y, nx, ny, s) && dist_point_segment(nx, ny, s) >= clearance) &&
-      this.detectors.every(d => path_ok(nx, ny, d));
-    for (const [nx, ny] of [[x, y], [x, l.y], [l.x, y]])
+    const obstacles = this.segments().concat(this.holes.flatMap(poly_edges));
+    const inside_bounds = (px, py) => px >= margin && px <= bounds.w - margin && py >= margin && py <= bounds.h - margin;
+    const clamp = (px, py) => [Math.min(bounds.w - margin, Math.max(margin, px)), Math.min(bounds.h - margin, Math.max(margin, py))];
+    // detectors a light already overlaps don't trap it
+    const dets = this.detectors.filter(d => Math.hypot(d.x - l.x, d.y - l.y) >= det_clearance);
+
+    const resolve = (px, py) =>
     {
-      if (ok(nx, ny)) { l.x = nx; l.y = ny; return; }
+      for (let pass = 0; pass < 4; ++pass)
+      {
+        let moved = false;
+        for (const s of obstacles)
+        {
+          const hit = project_on_segment(px, py, s);
+          if (hit.d >= clearance) continue;
+          const nx = hit.d > 1e-6 ? (px - hit.x) / hit.d : -(s.ey - s.sy), ny = hit.d > 1e-6 ? (py - hit.y) / hit.d : s.ex - s.sx;
+          const len = Math.hypot(nx, ny) || 1;
+          px = hit.x + nx / len * clearance;
+          py = hit.y + ny / len * clearance;
+          moved = true;
+        }
+        for (const d of dets)
+        {
+          const dd = Math.hypot(px - d.x, py - d.y);
+          if (dd >= det_clearance) continue;
+          const ux = dd > 1e-6 ? (px - d.x) / dd : 1, uy = dd > 1e-6 ? (py - d.y) / dd : 0;
+          px = d.x + ux * det_clearance;
+          py = d.y + uy * det_clearance;
+          moved = true;
+        }
+        [px, py] = clamp(px, py);
+        if (!moved) break;
+      }
+      return [px, py];
+    };
+    const valid = (px, py) =>
+      inside_bounds(px, py) && !this.in_hole(px, py) &&
+      obstacles.every(s => dist_point_segment(px, py, s) >= clearance - 0.01) &&
+      dets.every(d => Math.hypot(px - d.x, py - d.y) >= det_clearance - 0.01);
+
+    const dist = Math.hypot(x - l.x, y - l.y);
+    const steps = Math.min(160, Math.ceil(dist / 3) * 2);
+    let progressed = false;
+    for (let i = 0; i < steps; ++i)
+    {
+      const dx = x - l.x, dy = y - l.y, d = Math.hypot(dx, dy);
+      if (d < 0.5) break;
+      const k = Math.min(3, d) / d;
+      let [nx, ny] = resolve(l.x + dx * k, l.y + dy * k);
+      if (!valid(nx, ny) || obstacles.some(s => segments_intersect(l.x, l.y, nx, ny, s))) break;
+      if (Math.hypot(nx - l.x, ny - l.y) < 0.05) break;
+      l.x = nx; l.y = ny;
+      progressed = true;
     }
+    return progressed;
   }
 
   // moves a user point toward (x, y), staying inside the border and keeping its walls clear of
@@ -176,9 +227,9 @@ class World
     const others = mine.map(w => this.get_point(w.a === p.id ? w.b : w.a));
     const perm_segs = this.segments().filter(s => s.perm);
     const ok = (nx, ny) =>
-      point_in_polygon(nx, ny, border) &&
+      point_in_polygon(nx, ny, border) && !this.in_hole(nx, ny) &&
       perm_segs.every(s => dist_point_segment(nx, ny, s) >= 10) &&
-      others.every(q => Math.hypot(q.x - nx, q.y - ny) >= 12) &&
+      others.every(q => Math.hypot(q.x - nx, q.y - ny) >= 12 && !this.over_hole(q.x, q.y, nx, ny)) &&
       others.every(q =>
       {
         const s = {sx: q.x, sy: q.y, ex: nx, ey: ny};

@@ -3,7 +3,7 @@
 // overlays. Everything is drawn very close to the floor color so it reads as background.
 // Returns a p5.Graphics sized to the board, clipped to the level border.
 
-function make_floor_art(w, h, border, palette, seed)
+function make_floor_art(w, h, border, palette, seed, holes = [])
 {
   randomSeed(seed); // same seed => same floor, so saved games restore their background
   const g = createGraphics(w, h);
@@ -39,6 +39,8 @@ function make_floor_art(w, h, border, palette, seed)
   for (const f of overlays) f(g, w, h, line_col);
   // lived-in grime and alien details on top
   for (const f of shuffle(DECOR_OVERLAYS.slice()).slice(0, floor(random(3, 6)))) f(g, w, h, decor_line(g));
+
+  draw_holes(g, holes);
 
   ctx.restore();
   randomSeed(Math.floor(Math.random() * 1e9));
