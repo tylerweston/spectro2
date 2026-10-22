@@ -1,4 +1,4 @@
-// spectro2 - free-form (non grid) light puzzle.
+// spectro2 - light puzzle.
 // Click empty space / a point / a permanent wall to start a wall, click again to finish (Esc cancels).
 // Right-click a point (or hold left click on it) to delete it and its walls.
 // Drag lights to move them; click a light to toggle it.
@@ -724,7 +724,7 @@ function mousePressed(e)
   // lights can't be grabbed or toggled while a wall is being drawn
   const light = pending ? null : world.light_at(mx, my);
   press = {x: mx, y: my, t: millis(), light, point: world.user_point_at(mx, my), moved: false};
-  if (light) drag_light = light;
+  if (light && !light.fixed) drag_light = light;
   // an existing point can be dragged to move it (not while a wall is being drawn)
   if (!light && !pending && press.point) drag_point = press.point;
   return false;

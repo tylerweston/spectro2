@@ -213,7 +213,11 @@ function mechanical(g, w, h, line_col)
 }
 
 // brighter line colour than the primary pattern so these details read against the floor
-function decor_line(g) { return a => g.color(105, 110, 125, Math.min(255, a * 1.8)); }
+function decor_line(g)
+{
+  const c = mix_rgb([105, 110, 125], FLOOR_ACCENT[0], 0.25);
+  return a => g.color(c[0], c[1], c[2], Math.min(255, a * 1.8));
+}
 
 let FLOOR_EXTRA_FAMILIES = [];
 const DECOR_OVERLAYS = [stains, scratches, scorch, vines, growths, glyphs, mechanical];

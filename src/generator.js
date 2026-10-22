@@ -108,6 +108,34 @@ function robust_color(polys, lights, x, y)
   return c;
 }
 
+// true when switching lights on/off alone (no walls, no moving) already satisfies every detector
+function solvable_by_toggling(lights, perm, dets)
+{
+  const polys = polys_for(lights.map(l => ({...l, on: true})), perm);
+  for (let mask = 0; mask < (1 << lights.length); ++mask)
+  {
+    const sub_polys = polys.map((p, i) => (mask & (1 << i) ? p : null));
+    if (dets.every(d => same_color(color_at_polys(sub_polys, lights, d.x, d.y), d))) return true;
+  }
+  return false;
+}
+
+// each solution wall should be the only thing keeping some detector right (removal is tested in
+// the pruning pass), and the walls must not all serve the very same detector
+function dets_need_distinct_walls(lights, perm, sol, dets)
+{
+  const served = new Set();
+  for (let i = 0; i < sol.length; ++i)
+  {
+    const pp = polys_for(lights, perm.concat(sol.filter((_, j) => j !== i)));
+    const broken = dets.filter(d => { const c = robust_color(pp, lights, d.x, d.y); return !(c && same_color(c, d)); });
+    if (!broken.length) return false;
+    if (broken.every(d => served.has(d))) continue;
+    broken.forEach(d => served.add(d));
+  }
+  return served.size >= Math.min(sol.length + 1, dets.length);
+}
+
 // big: a deliberately complex level (many walls, detectors and permanent walls) for the menu backdrop
 function generate_level(level_num, big = false)
 {
@@ -276,6 +304,45 @@ function light_formation(kind, n)
 
 const FORMATIONS = ['random', 'ring', 'line', 'corners'];
 
+// ---------- light variants ----------
+// classic: one light per color, lighting the whole room
+// twins:   two lights share a color (walls have to shade both)
+// local:   every light only reaches a limited radius
+// mixed:   some lights are local, some fill the room
+// anchored: some lights are bolted down, only walls can solve those
+// crowd:   four or five lights, with repeated colors, usually a mix of local ones
+const VARIANTS = ['classic', 'twins', 'local', 'mixed', 'anchored', 'crowd'];
+
+function pick_variant(diff, big)
+{
+  if (big) return pick(['mixed', 'crowd', 'anchored']);
+  if (diff < 2) return 'classic';
+  if (diff < 4) return pick(['classic', 'twins', 'local', 'mixed']);
+  return pick(VARIANTS);
+}
+
+function light_setup(variant, diff)
+{
+  const u = Math.min(AREA_W, AREA_H);
+  const n = variant === 'crowd' ? (diff >= 9 && Math.random() < 0.4 ? 5 : 4) : (diff < 3 && variant !== 'twins' ? 2 : 3);
+  const base = LIGHT_COLORS.slice().sort(() => Math.random() - 0.5);
+  const colors = [];
+  for (let i = 0; i < n; ++i) colors.push(i < 3 ? base[i] : pick(base));
+  if (variant === 'twins') colors[1] = colors[0]; // lights 0 and 1 share a color, light 2 (if any) differs
+  const local = new Set(), fixed = new Set();
+  const order = [...Array(n).keys()].sort(() => Math.random() - 0.5);
+  if (variant === 'local') order.forEach(i => local.add(i));
+  else if (variant === 'mixed') order.slice(0, Math.max(1, Math.floor(n / 2))).forEach(i => local.add(i));
+  else if (variant === 'crowd') order.slice(0, Math.floor(n * 0.6)).forEach(i => local.add(i));
+  else if (variant === 'anchored') order.slice(0, n > 2 && Math.random() < 0.4 ? 2 : 1).forEach(i => fixed.add(i));
+  if (variant === 'anchored' && Math.random() < 0.5) local.add(order[order.length - 1]);
+  return colors.map((c, i) => ({
+    r: c[0], g: c[1], b: c[2],
+    range: local.has(i) ? Math.round(u * rnd(0.3, 0.48) * (variant === 'crowd' ? 0.85 : 1)) : 0,
+    fixed: fixed.has(i)
+  }));
+}
+
 function try_generate(diff, big)
 {
   const border = make_border();
@@ -306,7 +373,9 @@ function try_generate(diff, big)
 
   // lights, in a pattern when one fits
   const lights = [];
-  const n_lights = diff < 3 ? 2 : 3;
+  const variant = pick_variant(diff, big);
+  const setup = light_setup(variant, diff);
+  const n_lights = setup.length;
   const formation = pick(FORMATIONS);
   const form = light_formation(formation, n_lights);
   for (let i = 0; i < n_lights; ++i)
@@ -317,10 +386,10 @@ function try_generate(diff, big)
       const p = k === 0 && form[i] ? form[i] : rnd_point(25);
       if (!inside(p.x, p.y, 25)) continue;
       if (min_seg_dist(p.x, p.y, perm) < 30) continue;
-      if (lights.some(l => Math.hypot(l.x - p.x, l.y - p.y) < 90)) continue;
+      if (lights.some(l => Math.hypot(l.x - p.x, l.y - p.y) < (n_lights > 3 ? 70 : 90))) continue;
       if (holes.length && space.sizes[space.region(p.x, p.y)] < space.free_n * 0.08) continue; // not a sliver of an island
-      const [r, g, b] = LIGHT_COLORS[i];
-      lights.push({x: p.x, y: p.y, r, g, b, on: true});
+      const {r, g, b, range, fixed} = setup[i];
+      lights.push({x: p.x, y: p.y, r, g, b, on: true, ...(range ? {range} : {}), ...(fixed ? {fixed: true} : {})});
       placed = true;
     }
     if (!placed) return null;
@@ -328,7 +397,7 @@ function try_generate(diff, big)
 
   // the solution: player-built walls, chained from each other or from permanent walls
   const sol = [];
-  const n_sol = Math.min(2 + Math.floor(diff / 2), big ? 10 : 6);
+  const n_sol = Math.min(3 + Math.floor(diff / 2), big ? 10 : 7);
   for (let i = 0; i < n_sol; ++i)
   {
     for (let k = 0; k < 30; ++k)
@@ -364,7 +433,7 @@ function try_generate(diff, big)
   const polys_bare = polys_for(lights, perm);
   const polys_sol = polys_for(lights, all_sol);
   const dets = [];
-  const n_dets = Math.min(2 + Math.floor(diff / 2), big ? 14 : 8);
+  const n_dets = Math.min(3 + Math.floor(diff / 2), big ? 14 : 9);
   // rare: shadow detectors (black) that must stay completely dark, lit by the bare room so a wall has to shade them
   const max_shadows = diff >= 3 && Math.random() < 0.3 ? (big ? 2 : 1 + (diff >= 8 && Math.random() < 0.3 ? 1 : 0)) : 0;
   let shadows = 0;
@@ -382,7 +451,7 @@ function try_generate(diff, big)
     if (dark) ++shadows;
     dets.push({x: p.x, y: p.y, r: c.r, g: c.g, b: c.b, lit: false});
   }
-  if (dets.length < (big ? 8 : 2) || dets.length === shadows) return null;
+  if (dets.length < (big ? 8 : diff >= 3 ? 3 : 2) || dets.length === shadows) return null;
 
   // drop solution walls that aren't needed
   let changed = true;
@@ -399,7 +468,11 @@ function try_generate(diff, big)
       }
     }
   }
-  if (sol.length < (big ? 5 : 1)) return null;
+  // the bar for "needs enough walls" rises with the level; every kept wall is necessary
+  const min_walls = big ? 5 : diff < 2 ? 1 : diff < 5 ? 2 : diff < 9 ? 3 : 4;
+  if (sol.length < min_walls) return null;
+  // every wall has to matter in a different place: reject solutions that are just one wall repeated
+  if (sol.length > 1 && !dets_need_distinct_walls(lights, perm, sol, dets)) return null;
 
   // scramble the lights, into a (different) pattern when one fits
   const start_form = light_formation(pick(FORMATIONS), lights.length);
@@ -407,19 +480,25 @@ function try_generate(diff, big)
     for (let k = 0; k < 100; ++k)
     {
       const p = k === 0 && start_form[i] ? start_form[i] : rnd_point(25);
+      if (l.fixed) break;
       if (inside(p.x, p.y, 25) && space.region(p.x, p.y) === space.region(l.x, l.y) && min_seg_dist(p.x, p.y, perm) >= 30 && dets.every(d => Math.hypot(d.x - p.x, d.y - p.y) >= 40))
         return {...l, x: p.x, y: p.y, on: Math.random() > 0.3};
     }
-    return {...l};
+    return {...l, on: l.fixed ? Math.random() > 0.3 : l.on};
   });
   const pp = polys_for(start_lights, perm);
   if (dets.every(d => same_color(color_at_polys(pp, start_lights, d.x, d.y), d))) return null;
+  // the opening position should be mostly wrong, and shouldn't be fixable by just flipping switches
+  const start_ok = dets.filter(d => same_color(color_at_polys(pp, start_lights, d.x, d.y), d)).length;
+  if (diff >= 2 && start_ok > Math.ceil(dets.length * 0.4)) return null;
+  if (diff >= 3 && solvable_by_toggling(start_lights, perm, dets)) return null;
 
   return {
     w: AREA_W,
     h: AREA_H,
     seed: Math.floor(Math.random() * 1e9),
     theme,
+    variant,
     border,
     holes,
     perm_walls: perm,

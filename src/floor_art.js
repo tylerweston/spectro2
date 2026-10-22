@@ -1,5 +1,5 @@
 // Per-level generative floor. Each level picks one primary fractal family (squares, circles,
-// triangles, hex cells or branching coral), a random rotation, and a couple of secondary
+// triangles, hex cells, coral, or one of the extras in floor_extra.js), a random symmetry transform, and a couple of secondary
 // overlays. Everything is drawn very close to the floor color so it reads as background.
 // Returns a p5.Graphics sized to the board, clipped to the level border.
 
@@ -10,9 +10,10 @@ function make_floor_art(w, h, border, palette, seed, holes = [])
   g.pixelDensity(Math.min(2, window.devicePixelRatio || 1));
   g.background(palette.outside);
 
-  const tint = random([[0, 6, 14], [0, 12, 6], [10, 0, 14], [14, 6, 0], [0, 10, 12], [8, 8, 0]]);
-  const base = [37 + tint[0] * 0.3, 37 + tint[1] * 0.3, 41 + tint[2] * 0.3];
-  const line_col = (a) => g.color(60 + tint[0] * 2, 62 + tint[1] * 2, 70 + tint[2] * 2, a);
+  // very subtle colour: a per-level accent pair tints the floor and its lines
+  FLOOR_ACCENT = random(FLOOR_ACCENTS);
+  const base = [37, 37, 41].map((v, i) => v + (FLOOR_ACCENT[0][i] - 100) * 0.07);
+  const line_col = accent_line(g, 0.32);
 
   // fill and clip to the irregular border
   const ctx = g.drawingContext;
@@ -26,15 +27,27 @@ function make_floor_art(w, h, border, palette, seed, holes = [])
 
   const families = [fractal_squares, fractal_circles, fractal_triangles, hex_cells, coral, ...FLOOR_EXTRA_FAMILIES];
   const primary = random(families);
-  const overlays = shuffle([ribbed_squares, veins, concentric_arcs, speckle]).slice(0, floor(random(1, 3)));
+  const overlays = shuffle([ribbed_squares, veins, concentric_arcs, speckle, ...FLOOR_EXTRA_OVERLAYS]).slice(0, floor(random(1, 3)));
 
-  // draw the primary pattern on a rotated, oversized area so rotation leaves no gaps
-  const diag = Math.hypot(w, h);
+  color_wash(g, w, h, line_col);
+
+  // draw the primary pattern on an oversized area so rotation, stretching and mirroring leave no gaps
+  const size = Math.hypot(w, h) * 1.3;
   g.push();
   g.translate(w / 2, h / 2);
-  g.rotate(random() < 0.4 ? 0 : random(TWO_PI));
-  primary(g, -diag / 2, -diag / 2, diag, diag, line_col);
+  draw_symmetric(g, primary, size, line_col);
   g.pop();
+
+  // sometimes a second, fainter family on top at a different angle
+  if (random() < 0.3)
+  {
+    const second = random(families.filter(f => f !== primary));
+    g.push();
+    g.translate(w / 2, h / 2);
+    g.rotate(random(TWO_PI));
+    second(g, -size / 2, -size / 2, size, size, a => line_col(a * 0.55));
+    g.pop();
+  }
 
   for (const f of overlays) f(g, w, h, line_col);
   // lived-in grime and alien details on top

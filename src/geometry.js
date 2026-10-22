@@ -76,11 +76,13 @@ function project_on_segment(px, py, s)
 }
 
 // additive mix of every light whose visibility polygon contains the point
+// (lights with a `range` only reach points within that distance)
 function color_at_polys(polys, lights, x, y)
 {
   let r = 0, g = 0, b = 0;
   for (let i = 0; i < lights.length; ++i)
   {
+    if (lights[i].range && Math.hypot(x - lights[i].x, y - lights[i].y) > lights[i].range) continue;
     if (polys[i] && point_in_polygon(x, y, polys[i]))
     {
       r = Math.max(r, lights[i].r); g = Math.max(g, lights[i].g); b = Math.max(b, lights[i].b);

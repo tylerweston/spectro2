@@ -23,13 +23,25 @@ function render_light_layer(layer, lights, polys)
     ctx.clip();
     // reach the farthest corner so the light is never cut off before a wall
     const reach = Math.hypot(Math.max(l.x, layer.width - l.x), Math.max(l.y, layer.height - l.y));
-    const g = ctx.createRadialGradient(l.x, l.y, 0, l.x, l.y, reach);
     const rgb = `${l.r},${l.g},${l.b}`;
-    // deliberately gentle: the hue stays clearly readable everywhere, brightest near the bulb
-    g.addColorStop(0, `rgba(${rgb},0.50)`);
-    g.addColorStop(0.25, `rgba(${rgb},0.40)`);
-    g.addColorStop(1, `rgba(${rgb},0.32)`);
-    ctx.fillStyle = g;
+    if (l.range)
+    {
+      // a local light: full strength right up to a short fade at its edge (matches what detectors see)
+      const g = ctx.createRadialGradient(l.x, l.y, 0, l.x, l.y, l.range);
+      g.addColorStop(0, `rgba(${rgb},0.52)`);
+      g.addColorStop(0.9, `rgba(${rgb},0.36)`);
+      g.addColorStop(1, `rgba(${rgb},0)`);
+      ctx.fillStyle = g;
+    }
+    else
+    {
+      const g = ctx.createRadialGradient(l.x, l.y, 0, l.x, l.y, reach);
+      // deliberately gentle: the hue stays clearly readable everywhere, brightest near the bulb
+      g.addColorStop(0, `rgba(${rgb},0.50)`);
+      g.addColorStop(0.25, `rgba(${rgb},0.40)`);
+      g.addColorStop(1, `rgba(${rgb},0.32)`);
+      ctx.fillStyle = g;
+    }
     ctx.fillRect(0, 0, layer.width, layer.height);
     ctx.restore();
   });
@@ -42,6 +54,27 @@ function draw_light_bulb(l, t, dragging)
 {
   const pulse = settings.animations ? 1 + 0.06 * Math.sin(t / 380 + l.x * 0.05) : 1;
   noStroke();
+  if (l.range && l.on)
+  {
+    noFill();
+    stroke(l.r, l.g, l.b, 110);
+    strokeWeight(1.5);
+    drawingContext.setLineDash([3, 6]);
+    circle(l.x, l.y, l.range * 2);
+    drawingContext.setLineDash([]);
+    noStroke();
+  }
+  if (l.fixed)
+  {
+    // bolted down: a small square mount under the bulb
+    fill(18, 18, 28, 190);
+    stroke(215, 215, 230, l.on ? 230 : 140);
+    strokeWeight(2);
+    rectMode(CENTER);
+    rect(l.x, l.y, 32, 32, 6);
+    rectMode(CORNER);
+    noStroke();
+  }
   if (l.on)
   {
     // soft halo

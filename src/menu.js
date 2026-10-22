@@ -155,6 +155,7 @@ function menu_def()
         "right click or hold a point to remove it.",
         "drag lights, click a light to switch it.",
         "mix red, green and blue light to match each detector.",
+        "some lights only reach so far (dotted ring), and boxed lights can't be moved.",
         "you need not use every wall: fewer is a better solution."
       ],
       items: [{label: "back", enabled: true, action: () => { state = 'menu'; menu_sel = -1; }}]
